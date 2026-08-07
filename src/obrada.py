@@ -12,12 +12,22 @@ BASELINE_CLOSED_RUNS = {2}
 UNILATERAL_RUNS = {3, 4, 7, 8, 11, 12}
 BILATERAL_RUNS = {5, 6, 9, 10, 13, 14}
 
+
+
+#zbog PhysioNet dokumentacje, protokol se ponavlja 3 puta u ciklusu od 4 runa
+# Task1 (real unilateral) -> Task2 (imagined unilateral) -> Task3 (real bilateral)  -> Task4 (imagined bilateral), tri puta zaredom.
+EXECUTION_RUNS = {3, 4, 7, 8, 11, 12}
+IMAGERY_RUNS = {5, 6, 9, 10, 13, 14}
+
 EPOCH_TMIN = 0.0
 EPOCH_TMAX = 4.0 #pretpostavka svaki zadatak u skupu traje 4 sekunde
 
 LABEL_MAP_UNILATERAL = {'T0': 'rest', 'T1': 'left_fist', 'T2': 'right_fist'}
 LABEL_MAP_BILATERAL = {'T0': 'rest', 'T1': 'both_fists', 'T2': 'both_feet'}
 
+
+# fiksni event_id -> ISTI numerički kod za isti event kroz sve runove/ispitanike
+# i zato kad se koristi mne.concatenate_epochs, epohe se mogu spojiti jer svi T1/T2 imaju isti numerički kod inače abecedno events_from_annotations bi dodijelio različite numeričke kodove za T1/T2 ovisno o abecednom redoslijedu opisa u anotacijama
 CODE_MAP = {'rest': 0, 'left_fist': 1, 'right_fist': 2, 'both_fists': 3, 'both_feet': 4}
 
 
@@ -39,6 +49,15 @@ def get_run_type(run_id):
     if run_id in BILATERAL_RUNS:
         return 'bilateral'
     return 'unknown'
+
+def get_modality(run_id):
+    #'execution' | 'imagery' | None (baseline runovi nemaju modalitet)
+    if run_id in EXECUTION_RUNS:
+        return 'execution'
+    if run_id in IMAGERY_RUNS:
+        return 'imagery'
+    return None
+
 
 
 def remap_annotations(annotations, run_type):  #preimenuje T0/T1/T2 u opisne nazive ovisno o tipu runa
@@ -120,6 +139,7 @@ def loading_files(preprocess_config: PreprocessConfig = None):
                 subjects.setdefault(subject_id, {})[run_id] = {
                     'run_type': run_type,
                     'raw': raw,
+                    'modality': get_modality(run_id),
                     'epochs': epochs,
                     'event_id_map': event_id_map,
                     'ica': ica,
@@ -146,10 +166,14 @@ def save_subject_epochs(subjects, out_dir='processed'):
                     os.path.join(subj_dir, f'{data["run_type"]}_raw.fif'), 
                     overwrite=True
                 )
-            elif data['epochs'] is not None:
+            elif data['epochs'] is not None and len(data['epochs']) > 0:
                 task_epochs_list.append(data['epochs'])
                 
         if task_epochs_list:
+            #valid_epochs = [epochs for epochs in task_epochs_list if len(epochs) > 0]
+            #if not valid_epochs:
+                #print(f"Nema preostalih važećih epoha za ispitanika S{subject_id:03d} nakon postprocesiranja.")
+                #continue
             all_epochs = mne.concatenate_epochs(task_epochs_list)
             all_epochs.save(
                 os.path.join(subj_dir, 'task_epochs-epo.fif'),
@@ -174,7 +198,7 @@ def verify_single_subject(subjects, subject_id=1):
     for run_id in sorted(runs):
         data = runs[run_id]
         raw = data['raw']
-        print(f"\n--- Run {run_id:02d} ({data['run_type']}) ---")
+        print(f"\n--- Run {run_id:02d} ({data['run_type']}, modality={data['modality']}) ---")
         print(f"  Trajanje: {raw.times[-1]:.1f} s, fs: {raw.info['sfreq']} Hz, "
               f"broj kanala: {len(raw.ch_names)}")
         print(f"  Prvih 5 kanala: {raw.ch_names[:5]}")
@@ -214,5 +238,5 @@ if __name__ == '__main__':
  
     subjects = loading_files(preprocess_config=config)
     verify_single_subject(subjects, subject_id=1)
-    save_subject_epochs(subjects)
+    #save_subject_epochs(subjects)
     print("\nGotovo. Pretprocesirane epohe i baseline zapisi spremljeni u ./processed/")
