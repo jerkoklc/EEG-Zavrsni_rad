@@ -1,6 +1,4 @@
 """
-Konfigurabilni pretprocesiranje pipeline za PhysioNet EEG Motor Movement/Imagery
-podatke.
 
 Dokumentacija skupa podataka propisuje samo snimanje prema 10-10 sustavu
 elektroda pri 160 Hz - ne propisuje referencu, pojas filtriranja niti metodu
