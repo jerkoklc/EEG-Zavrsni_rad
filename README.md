@@ -95,7 +95,6 @@ The available binary tasks are defined in `src/značajke.py`:
         └── boxplot_rest_vs_task_lda.png
 ```
 
-For function-level documentation, see [DOCUMENTATION.md](DOCUMENTATION.md).
 
 ## Installation
 
