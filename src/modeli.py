@@ -41,6 +41,15 @@ def build_feature_based_pipelines(random_state=42, pca_variance=0.95):
     #RF i HistGradientBoosting dobivaju PCA kroak prije klasifikatora
     #PCA je fitan unutar pipelinea dakle koristi se samo na train foldu u cross-validationu
 
+    # sanitize random_state: allow int, None, or np.random.RandomState
+    if isinstance(random_state, np.random.RandomState) or random_state is None:
+        rs = random_state
+    else:
+        try:
+            rs = int(random_state)
+        except Exception:
+            rs = 42
+
     return{        
         'lda': Pipeline(
             [
@@ -51,23 +60,23 @@ def build_feature_based_pipelines(random_state=42, pca_variance=0.95):
         'svm_linear': Pipeline(
             [
                 ('scaler', StandardScaler()),
-                ('clf', SVC(kernel='linear', probability=True, random_state=random_state)),
+                ('clf', SVC(kernel='linear', probability=True, random_state=rs)),
             ]
             
         ),
         'svm_rbf': Pipeline(
             [
                 ('scaler', StandardScaler()),
-                ('clf', SVC(kernel='rbf', probability=True, random_state=random_state)),
+                ('clf', SVC(kernel='rbf', probability=True, random_state=rs)),
             ]
         ),
         'random_forest': Pipeline(
             [
                 ('scaler', StandardScaler()),
-                ('pca', PCA(n_components=pca_variance, random_state=random_state)),
+                ('pca', PCA(n_components=pca_variance, random_state=rs)),
                 ('clf', RandomForestClassifier(
                     n_estimators=300, max_depth=8, min_samples_leaf=3,
-                    class_weight='balanced', random_state=random_state)),
+                    class_weight='balanced', random_state=rs)),
             ]
         ),
        # HistGradientBoostingClassifier se koristi zato što je brzi i otporan na koreliranje značajke bez ručnog podešavanja dubine
@@ -75,9 +84,9 @@ def build_feature_based_pipelines(random_state=42, pca_variance=0.95):
         'gradient_boosting': Pipeline(
             [
                 ('scaler', StandardScaler()),
-                ('pca', PCA(n_components=pca_variance, random_state=random_state)),
+                ('pca', PCA(n_components=pca_variance, random_state=rs)),
                 ('clf', HistGradientBoostingClassifier(max_depth= 6, class_weight='balanced',
-                    random_state=random_state)),
+                    random_state=rs)),
             ]
         ),
         

@@ -2,3 +2,5 @@
 processed/
 files/
 DOCUMENTATION.md
+cache/
+__pycache__/
