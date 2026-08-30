@@ -1,4 +1,4 @@
-"""
+"""Konfigurabilni pipeline za pretprocesiranje PhysioNet EEG podataka.
 
 Dokumentacija skupa podataka propisuje samo snimanje prema 10-10 sustavu
 elektroda pri 160 Hz - ne propisuje referencu, pojas filtriranja niti metodu
@@ -6,20 +6,16 @@ uklanjanja artefakata. Svi parametri ispod su stoga metodološki izbori
 (uobičajeni u MI/BCI literaturi), ne specifikacija dataseta, i moraju biti
 obrazloženi u radu.
 
-Svaki korak (CAR, filtriranje, uklanjanje artefakata, odabir kanala,
-normalizacija) može se neovisno uključiti/isključiti preko PreprocessConfig -
-namjerno, jer je usporedba tih varijanti dio zadatka (analiza utjecaja
-odabira kanala i reprezentacije signala na rezultate).
+Koraci se mogu pojedinačno uključiti ili isključiti kroz PreprocessConfig,
+što olakšava usporedbu različitih postavki.
 
 Tijek:
     raw (iz loading.py)  --preprocess_raw-->  filtrirani/re-referencirani raw
                           --epohiranje (loading.py, NAKON preprocess_raw)-->
     epochs                --postprocess_epochs-->  epohe bez artefakata
 
-Preporučeni redoslijed: preprocess_raw() PRIJE epohiranja (CAR/filter/ICA rade
-bolje na kontinuiranom zapisu), zatim epohiranje, zatim postprocess_epochs()
-za odbacivanje loših epoha. Normalizacija se NE radi na cijelom skupu odjednom
-- vidi napomenu uz normalize_epochs() o curenju podataka (data leakage).
+preprocess_raw() se poziva prije epohiranja, a postprocess_epochs() nakon toga.
+Normalizacija se fit-a samo na trening podacima.
 """
 
 import os
@@ -32,9 +28,10 @@ import matplotlib.pyplot as plt
 import mne
 import numpy as np
 
-# Kanali nad motoričkim korteksom - u ovom datasetu nazivi kanala imaju
-# točke radi popunjavanja na 4 znaka (EDF ograničenje), npr. 'C3..', 'Cz..'.
-# clean_channel_names() ih uklanja pa dalje radimo sa standardnim nazivima.
+# Nazivi kanala u EDF-u imaju dopunjene točke, pa ih prvo čistimo.
+# Zapisi se prije ostale obrade usklađuju na 160 Hz.
+TARGET_SFREQ = 160.0
+
 MOTOR_CORTEX_CHANNELS = [
     'FC5', 'FC3', 'FC1', 'FCZ', 'FC2', 'FC4', 'FC6',
     'C5', 'C3', 'C1', 'CZ', 'C2', 'C4', 'C6',
@@ -44,6 +41,11 @@ MOTOR_CORTEX_CHANNELS = [
 
 @dataclass
 class PreprocessConfig:
+    """Postavke koje se koriste u obradi kontinuiranog zapisa i epoha.
+
+    Zadane vrijednosti predstavljaju konfiguraciju korištenu u glavnim
+    primjerima: CAR, pojas 8-30 Hz, svi kanali i z-score normalizacija.
+    """
     # 1. re-referenciranje
     apply_car: bool = True
 
@@ -68,11 +70,13 @@ class PreprocessConfig:
     normalize_method: str = 'zscore'  # 'zscore' | 'minmax'
 
 
-# --- 0. priprema kanala --------------------------------------------------
+# Priprema kanala.
 
 def clean_channel_names(raw):
-    """Uklanja točke iz naziva kanala ('C3..' -> 'C3') i postavlja standardnu
-    10-10/10-20 montažu (potrebno za CAR i ICA, i korisno za topoplotove)."""
+    """Čisti nazive kanala i postavlja standardnu EEG montažu.
+
+    Radi nad kopijom ulaza, pa pozivatelj zadržava originalni Raw objekt.
+    """
     raw = raw.copy()
     raw.rename_channels(lambda ch: ch.strip('.').upper())
     montage = mne.channels.make_standard_montage('standard_1005')
@@ -80,13 +84,14 @@ def clean_channel_names(raw):
     return raw
 
 
-# --- 1-4. pipeline na Raw (PRIJE epohiranja) ------------------------------
+# Obrada kontinuiranog Raw zapisa, prije epohiranja.
 
 def preprocess_raw(raw, config: PreprocessConfig, verbose=False):
     """Primjenjuje re-referenciranje, filtriranje, ICA i odabir kanala na
     kontinuirani (neepohirani) zapis. Vraća (raw, ica) - novi (kopirani) Raw
     objekt i fitanu ICA instancu (ili None ako ICA nije korištena/primijenjena).
-    Originalni raw ostaje nepromijenjen.
+    Originalni raw ostaje nepromijenjen. Resampliranje se radi prije filtera
+    kako bi svi ispitanici kasnije imali isti broj uzoraka po epohi.
 
     NAPOMENA: ica se namjerno vraća kao zaseban objekt, a NE sprema u
     raw.info - MNE-ov Info objekt prihvaća samo unaprijed poznata polja pa
@@ -94,7 +99,14 @@ def preprocess_raw(raw, config: PreprocessConfig, verbose=False):
     raw = clean_channel_names(raw)
     ica = None
 
-    # 1. re-referenciranje (CAR)
+    # Neki zapisi su na 128 Hz. Bez resampliranja ne mogu se spojiti s
+    # zapisima na 160 Hz jer epohe nemaju isti broj uzoraka.
+    if abs(raw.info['sfreq'] - TARGET_SFREQ) > 1e-6:
+        if verbose:
+            print(f"Resampliram s {raw.info['sfreq']} Hz na {TARGET_SFREQ} Hz.")
+        raw.resample(TARGET_SFREQ, verbose=verbose)
+
+    # 1. common average reference
     if config.apply_car:
         raw.set_eeg_reference('average', projection=False, verbose=verbose)
 
@@ -107,8 +119,7 @@ def preprocess_raw(raw, config: PreprocessConfig, verbose=False):
     if config.apply_notch:
         raw.notch_filter(freqs=config.notch_freqs, verbose=verbose)
 
-    # 3. uklanjanje artefakata - ICA (threshold-based rejection radi se
-    #    kasnije na epohama, u postprocess_epochs)
+    # 3. ICA se samo fita; threshold odbacivanje radi se kasnije na epohama.
     if config.artifact_method == 'ica':
         ica = mne.preprocessing.ICA(
             n_components=config.ica_n_components,
@@ -116,12 +127,8 @@ def preprocess_raw(raw, config: PreprocessConfig, verbose=False):
             max_iter='auto', verbose=verbose,
         )
         ica.fit(raw, verbose=verbose)
-        # Automatska detekcija očnih artefakata zahtijeva EOG kanale kojih
-        # ovaj dataset nema - bez njih ICA komponente za isključivanje treba
-        # odrediti ručno (vizualnom inspekcijom ica.plot_components()) ili
-        # koristiti heuristike. Ovdje se ICA samo fita i vraća pozivatelju;
-        # primjenu (ica.apply(raw)) treba napraviti NAKON što se odaberu
-        # komponente za isključivanje (ica.exclude = [...]).
+        # Dataset nema EOG kanale, zato se komponente za isključivanje
+        # ne biraju automatski. ICA se vraća pozivatelju za pregled.
 
     # 4. odabir kanala
     if config.channel_selection == 'motor':
@@ -134,12 +141,10 @@ def preprocess_raw(raw, config: PreprocessConfig, verbose=False):
     return raw, ica
 
 
-# --- 3b/5. pipeline na Epochs (NAKON epohiranja) --------------------------
+# Obrada epoha nakon epohiranja.
 
 def postprocess_epochs(epochs, config: PreprocessConfig):
-    """Primjenjuje amplitudno odbacivanje loših epoha. Normalizaciju NE radi
-    ovdje (vidi normalize_epochs) jer se ona mora fitati samo na train
-    skupu da bi se izbjeglo curenje podataka (data leakage) iz test skupa."""
+    """Odbacuje epohe koje prelaze zadani amplitudni prag."""
     epochs = epochs.copy()
 
     if config.artifact_method == 'threshold':
@@ -154,16 +159,15 @@ def postprocess_epochs(epochs, config: PreprocessConfig):
 
 
 def normalize_epochs(X_train, X_test=None, method='zscore'):
-    """Standardizacija PO KANALU, fitana isključivo na train podacima.
+    """Normalizira po kanalima koristeći statistiku samo iz trening skupa.
 
-    X_train, X_test: np.ndarray oblika (n_epoha, n_kanala, n_uzoraka)
+    X_train, X_test: np.ndarray oblika (n_epoha, n_kanala, n_uzoraka).
+    Statistika se računa preko epoha i vremena, odvojeno za svaki kanal.
     Vraća normalizirane X_train (i X_test ako je zadan) koristeći statistiku
     (mean/std ili min/max) izračunatu SAMO iz X_train.
 
-    Namjerno je ovo odvojena funkcija koja radi nad numpy nizovima (ne nad
-    Epochs objektom) i traži eksplicitnu train/test podjelu kao argument -
-    normalizacija fitana preko cijelog skupa (train+test zajedno) je čest
-    izvor curenja podataka u per-subject/cross-subject evaluaciji.
+    Eksplicitni train/test argumenti pomažu da se statistika slučajno ne
+    izračuna iz test podataka.
     """
     if method == 'zscore':
         mean = X_train.mean(axis=(0, 2), keepdims=True)
@@ -182,7 +186,7 @@ def normalize_epochs(X_train, X_test=None, method='zscore'):
     return X_train_norm, X_test_norm
 
 
-# --- kompletan pipeline za jedan raw+epochs par ---------------------------
+# Pomoćna funkcija za brzu provjeru jednog zapisa.
 
 def run_preprocessing_pipeline(raw, epochs, config: PreprocessConfig):
     """Prikladno za brzo isprobavanje jedne konfiguracije: primjenjuje
@@ -196,7 +200,7 @@ def run_preprocessing_pipeline(raw, epochs, config: PreprocessConfig):
     return raw_processed, epochs_processed, ica
 
 
-# --- vizualna provjera -----------------------------------------------------
+# Vizualne provjere.
 
 def plot_psd_comparison(raw_before, raw_after, out_path='psd_comparison.png',
                          fmax=60.0):
@@ -221,7 +225,7 @@ def plot_example_epoch(epochs, index=0, channels=('C3', 'CZ', 'C4'),
                         out_path='example_epoch.png'):
     """Sprema graf jedne epohe za odabrane kanale radi vizualne provjere."""
     epochs = epochs.copy()
-    epochs.rename_channels(lambda ch: ch.strip('.').upper()) #ovo je riješilo problem s nazivima kanala koji imaju točke na kraju (EDF ograničenje) pa se ne podudaraju s MOTOR_CORTEX_CHANNELS
+    epochs.rename_channels(lambda ch: ch.strip('.').upper())
 
     available = [ch for ch in channels if ch in epochs.ch_names]
     if not available:
