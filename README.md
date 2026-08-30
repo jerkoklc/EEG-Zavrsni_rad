@@ -39,7 +39,7 @@ flowchart LR
   - Welch power in the mu (8-12 Hz) and beta (13-30 Hz) bands.
   - Morlet wavelet power with four temporal bins per epoch.
   - Raw epochs for CSP.
-- **Models:** LDA, linear SVM, RBF SVM, Random Forest, Histogram Gradient Boosting, and CSP + LDA.
+- **Models:** LDA, linear SVM, RBF SVM, Random Forest, Histogram Gradient Boosting, CSP + LDA, and an optional EEGNet implementation when PyTorch is available. The committed result grid includes all of these classifiers across the supported tasks.
 - **Evaluation:** stratified 5-fold cross-validation within subjects and group-aware cross-validation across subjects.
 - **Outputs:** cached features, experiment grids in CSV format, confusion matrices, PSD comparisons, and per-subject accuracy plots.
 
@@ -79,20 +79,23 @@ The available binary tasks are defined in `src/značajke.py`:
 ```text
 .
 ├── README.md
-├── DOCUMENTATION.md
-└── src/
-    ├── obrada.py                         # Loading, annotation mapping, epoching
-    ├── pretprocesiranje.py               # Preprocessing and diagnostic plots
-    ├── značajke.py                       # Tasks and feature extraction
-    ├── modeli.py                          # ML pipelines and CV helpers
-    ├── evaluacija.py                     # Evaluation grid and result export
-    ├── dedupe.py                         # Utility for duplicate data handling
-    ├── example_epoch.png                 # Example epoch plot
-    ├── psd_comparison.png                # PSD before/after preprocessing
-    └── results/
-        ├── experiment_grid_per_subject.csv
-        ├── experiment_grid_cross_subject.csv
-        └── boxplot_rest_vs_task_lda.png
+├── .gitignore
+├── z_rad/                              # local venv for the current working copy (optional)
+├── src/
+│   ├── obrada.py                       # Loading, annotation mapping, epoching
+│   ├── pretprocesiranje.py             # Preprocessing and diagnostic plots
+│   ├── značajke.py                     # Tasks and feature extraction
+│   ├── modeli.py                       # ML pipelines and CV helpers
+│   ├── evaluacija.py                   # Evaluation grid and result export
+│   ├── dedupe.py                       # Utility for duplicate data handling
+│   ├── files/                          # PhysioNet EDF data (not tracked by Git)
+│   ├── processed/                      # cached processed subject data
+│   ├── cache/                          # cached feature matrices for repeated runs
+│   ├── results/                        # CSV grids and generated plots
+│   ├── example_epoch.png               # Example epoch plot
+│   ├── psd_comparison.png              # PSD before/after preprocessing
+│   └── __pycache__/                    # local Python cache
+└── .venv/                              # optional fresh environment created by the user
 ```
 
 
@@ -107,7 +110,13 @@ python -m pip install --upgrade pip
 python -m pip install mne numpy scipy pandas matplotlib scikit-learn
 ```
 
-The repository also contains a local virtual environment in some working copies. It is ignored from version control and is not required; creating a fresh environment is recommended.
+If you want to run the optional EEGNet comparison model as well, install PyTorch in the same environment:
+
+```powershell
+python -m pip install torch
+```
+
+The repository also contains a local virtual environment in some working copies (for example `z_rad/` or a user-created `.venv/`). These directories are ignored by Git and are not required for normal use; creating a fresh environment is recommended.
 
 ## Running the pipeline
 
@@ -149,23 +158,22 @@ The default grid excludes subjects with fewer than 30 usable epochs and removes 
 
 ## Recorded results
 
-The tables below summarize the strongest rows by accuracy from the CSV files currently committed to `src/results/`. Values are means across the evaluation units reported in the `n` column; they are not claims about every possible task or configuration.
+The committed CSVs in `src/results/` contain a full evaluation grid for both scenarios and all implemented tasks. Each task was evaluated with the following classifiers: `lda`, `svm_linear`, `svm_rbf`, `random_forest`, `gradient_boosting`, and `csp_lda`.
 
-### Per-subject results
+### Evaluation coverage by scenario and task
 
-| Task | Representation | Channels | Classifier | Accuracy | F1 | ROC-AUC | n |
+| Scenario | Task | Tested classifiers | Best-performing configuration | Accuracy | F1 | ROC-AUC | n |
 | --- | --- | --- | --- | ---: | ---: | ---: | ---: |
-| `rest_vs_task` | Band power | All | Linear SVM | 0.793 | 0.800 | 0.857 | 74 |
-| `left_right_fist` | Raw + CSP | Motor | CSP + LDA | 0.669 | 0.651 | 0.717 | 57 |
-| `left_right_fist` | Time-frequency | All | Linear SVM | 0.659 | 0.647 | 0.704 | 57 |
+| Per-subject | `left_right_fist` | `lda`, `svm_linear`, `svm_rbf`, `random_forest`, `gradient_boosting`, `csp_lda` | Raw, motor, `csp_lda` | 0.668925 | 0.651037 | 0.717191 | 57 |
+| Per-subject | `fists_feet` | `lda`, `svm_linear`, `svm_rbf`, `random_forest`, `gradient_boosting`, `csp_lda` | Raw, all, `csp_lda` | 0.735367 | 0.734150 | 0.774070 | 56 |
+| Per-subject | `execution_vs_imagery` | `lda`, `svm_linear`, `svm_rbf`, `random_forest`, `gradient_boosting`, `csp_lda` | Band power, all, `svm_linear` | 0.794717 | 0.784755 | 0.855377 | 64 |
+| Per-subject | `rest_vs_task` | `lda`, `svm_linear`, `svm_rbf`, `random_forest`, `gradient_boosting`, `csp_lda` | Band power, all, `svm_linear` | 0.793096 | 0.800346 | 0.857445 | 74 |
+| Cross-subject | `left_right_fist` | `lda`, `svm_linear`, `svm_rbf`, `random_forest`, `gradient_boosting`, `csp_lda` | Time-frequency, all, `svm_linear` | 0.641655 | 0.611649 | 0.689140 | 10 |
+| Cross-subject | `fists_feet` | `lda`, `svm_linear`, `svm_rbf`, `random_forest`, `gradient_boosting`, `csp_lda` | Raw, all, `csp_lda` | 0.621192 | 0.590618 | 0.694545 | 8 |
+| Cross-subject | `execution_vs_imagery` | `lda`, `svm_linear`, `svm_rbf`, `random_forest`, `gradient_boosting`, `csp_lda` | Band power, all, `random_forest` | 0.574283 | 0.572693 | 0.611586 | 10 |
+| Cross-subject | `rest_vs_task` | `lda`, `svm_linear`, `svm_rbf`, `random_forest`, `gradient_boosting`, `csp_lda` | Time-frequency, all, `gradient_boosting` | 0.652535 | 0.669484 | 0.715282 | 10 |
 
-### Cross-subject results
-
-| Task | Representation | Channels | Classifier | Accuracy | F1 | ROC-AUC | n |
-| --- | --- | --- | --- | ---: | ---: | ---: | ---: |
-| `rest_vs_task` | Time-frequency | All | Random Forest | 0.647 | 0.663 | 0.708 | 10 |
-| `left_right_fist` | Time-frequency | All | Linear SVM | 0.642 | 0.612 | 0.689 | 10 |
-| `left_right_fist` | Time-frequency | All | Random Forest | 0.637 | 0.630 | 0.698 | 10 |
+This matrix makes the actual evaluation intent explicit: every classifier was applied across every task in both the per-subject and cross-subject scenarios; the table only highlights the best result for each task/scenario pair, while the full data remain in the CSV files.
 
 The difference between per-subject and cross-subject performance is expected: EEG signals vary substantially between people, and cross-subject evaluation prevents the model from relying on subject-specific patterns.
 
@@ -182,6 +190,12 @@ The figure compares the power spectral density of a recording before and after t
 This figure shows the time course of selected EEG channels from one 4-second epoch.
 
 ![Example EEG epoch](src/example_epoch.png)
+
+### Confusion matrix
+
+The confusion matrix below shows the `rest_vs_task` classification performance for the best-performing per-subject band-power SVM-linear configuration.
+
+![Confusion matrix for rest_vs_task SVM-linear](src/results/confusion_matrix_rest_vs_task_svm_linear.png)
 
 ### Per-subject accuracy distribution
 
@@ -202,7 +216,7 @@ The boxplot shows the distribution of per-subject accuracy for the `rest_vs_task
 
 - The current repository does not include automated unit tests or a pinned dependency lockfile.
 - ICA is fitted and returned for inspection, but automatic component selection is not enabled because the dataset does not provide dedicated EOG channels.
-- The available result grid covers `left_right_fist` and `rest_vs_task`; the other task definitions are implemented but are not represented in the committed grid tables.
+- The committed result grid covers all four implemented tasks (`left_right_fist`, `fists_feet`, `execution_vs_imagery`, and `rest_vs_task`), but not every possible classifier-feature-channel combination is exhaustively reported in the figures.
 - Future work could add nested hyperparameter tuning, confidence intervals, explicit subject metadata, and a fully automated figure/report generation command.
 
 ## License and data use
