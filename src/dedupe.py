@@ -1,6 +1,9 @@
-"""Uklanja duplicirane retke iz experiment grid CSV-a, zadržavajući ZADNJI
-upis po (scenario, task, feature_type, channel_selection, classifier) - to je
-onaj iz kasnijeg/potpunijeg pokretanja. Pokreni: python dedupe_csv.py putanja_do.csv
+"""Uklanja duple kombinacije iz CSV rezultata.
+
+Ključ retka čine scenario, task, reprezentacija, odabir kanala i klasifikator.
+Ako je skripta prekinuta i ista kombinacija kasnije ponovno izračunata, ostavlja
+se zadnji redak jer je to obično rezultat zadnjeg pokretanja. Pokretanje:
+python dedupe.py putanja_do.csv
 """
 import sys
 import pandas as pd
